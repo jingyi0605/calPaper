@@ -120,6 +120,8 @@
     finance: false,
     sidebarCollapsed: false,
     drawerOpen: false,
+    keypadOpen: true,
+    activeRow: -1,
     editingRename: false,
     renamingId: null,
     confirmDeleteId: null,
@@ -186,6 +188,7 @@
     var s = db.get("settings") || { _id: "settings" };
     s.finance = state.finance;
     s.sidebarCollapsed = state.sidebarCollapsed;
+    s.keypadOpen = state.keypadOpen;
     db.put(s);
   }
 
@@ -203,6 +206,7 @@
     var settings = db.get("settings") || {};
     state.finance = !!settings.finance;
     state.sidebarCollapsed = !!settings.sidebarCollapsed;
+    state.keypadOpen = settings.keypadOpen !== false;
 
     var docs = (db.allDocs("page/") || []).filter(function (d) { return d && d._id; });
     docs.sort(function (a, b) { return (b.createdAt || 0) - (a.createdAt || 0); });
@@ -247,8 +251,13 @@
   var $btnRemove = document.getElementById("btn-remove");
   var $brandDate = document.getElementById("brand-date");
   var $hintMain = document.getElementById("hint-main");
+  var $hintMobile = document.getElementById("hint-mobile");
   var $hintLock = document.getElementById("hint-lock");
   var $scrim = document.getElementById("scrim");
+  var $keypad = document.getElementById("keypad");
+  var $btnKeypad = document.getElementById("btn-keypad");
+  var $keypadGrid = document.getElementById("keypad-grid");
+  var $keypadTarget = document.getElementById("keypad-target");
 
   function pad2(n) { return n < 10 ? "0" + n : "" + n; }
   function fmtDate(ts) {
@@ -293,6 +302,7 @@
     $btnLock.querySelector(".ic-unlock").classList.toggle("hidden", !!p.locked);
     $hintLock.classList.toggle("hidden", !p.locked);
     $hintMain.classList.toggle("hidden", !!p.locked);
+    if ($hintMobile) $hintMobile.classList.toggle("hidden", !!p.locked);
   }
 
   function pageLabel(p) { return p.title || fmtDate(p.createdAt); }
@@ -439,6 +449,8 @@
       flush();
       state.current = i;
       state.editingRename = false;
+      // 行索引属于上一张稿纸，切换后重置
+      state.activeRow = -1;
       renderAll();
       var p = currentPage();
       if (!p.locked) setTimeout(function () { focusRow(p.rows.length - 1); }, 30);
@@ -606,11 +618,29 @@
   function wireRow(dom, row, index) {
     var ta = dom.ta;
 
+    /* 记录光标位置，供虚拟键盘插入使用。
+       软键盘收起或点击键盘按钮后 textarea 会失焦，此时 selectionStart 不可靠，
+       因此仅在聚焦时采样，其余情况沿用上一次缓存。 */
+    function rememberCaret() {
+      if (document.activeElement !== ta) return;
+      ta._caret = { start: ta.selectionStart, end: ta.selectionEnd };
+    }
+
+    ta.addEventListener("focus", function () {
+      state.activeRow = index;
+      rememberCaret();
+      renderKeypadTarget();
+    });
+    ["click", "keyup", "select"].forEach(function (evt) {
+      ta.addEventListener(evt, rememberCaret);
+    });
+
     ta.addEventListener("input", function () {
       row.expr = ta.value;
       row.ev = evalExpr(row.expr);
       autosize(ta);
       refreshRow(row, dom);
+      rememberCaret();
       saveSoon();
     });
 
@@ -668,12 +698,14 @@
     });
 
     if (activeIndex >= 0 && !locked) focusRow(activeIndex, true);
+    applyInputMode();
   }
 
   function renderAll() {
     renderTop();
     renderSidebar();
     renderPad();
+    applyKeypad();
   }
 
   /* ---------- 行操作 ---------- */
@@ -701,8 +733,10 @@
     }
     saveSoon();
     renderPad();
+    state.activeRow = target;
     focusRow(target, true);
     markJustAdded(target);
+    renderKeypadTarget();
   }
 
   function removeRow(index) {
@@ -712,7 +746,10 @@
     if (!page.rows.length) page.rows.push({ key: nextKey(), expr: "", ev: evalExpr("") });
     saveSoon();
     renderPad();
-    focusRow(Math.max(0, index - 1), true);
+    var focus = Math.max(0, index - 1);
+    state.activeRow = focus;
+    focusRow(focus, true);
+    renderKeypadTarget();
   }
 
   function focusRow(i, toEnd) {
@@ -727,12 +764,178 @@
     }
   }
 
+  /**
+   * 虚拟键盘展开时把输入框设为 inputmode="none"：点输入框仍可获得光标，
+   * 但不再弹出系统键盘，让自绘键盘成为移动端的主要输入方式。
+   */
+  function applyInputMode() {
+    var none = isMobile() && state.keypadOpen;
+    var tas = $pad.querySelectorAll(".row textarea");
+    for (var i = 0; i < tas.length; i++) {
+      if (tas[i].readOnly) continue;
+      if (none) tas[i].setAttribute("inputmode", "none");
+      else tas[i].removeAttribute("inputmode");
+    }
+  }
+
   function markJustAdded(index) {
     var rows = $pad.querySelectorAll(".row");
     var el = rows[index];
     if (!el) return;
     el.classList.add("just-added");
     setTimeout(function () { el.classList.remove("just-added"); }, 240);
+  }
+
+  /* ============================ 虚拟键盘 ============================ */
+
+  /** 键盘作用的目标行：优先上次聚焦的行，否则取最后一行 */
+  function targetRowIndex() {
+    var page = currentPage();
+    if (page.locked) return -1;
+    var i = state.activeRow;
+    if (typeof i !== "number" || i < 0 || i >= page.rows.length) i = page.rows.length - 1;
+    return i;
+  }
+
+  function targetTextarea() {
+    var i = targetRowIndex();
+    if (i < 0) return null;
+    return $pad.querySelectorAll(".row textarea")[i] || null;
+  }
+
+  function renderKeypadTarget() {
+    if (!$keypadTarget) return;
+    if (currentPage().locked) {
+      $keypadTarget.textContent = "已锁定";
+      return;
+    }
+    var i = targetRowIndex();
+    $keypadTarget.textContent = i >= 0 ? "第 " + (i + 1) + " 行" : "";
+  }
+
+  function applyKeypad() {
+    if (!$keypad) return;
+    $keypad.classList.toggle("collapsed", !state.keypadOpen);
+    if ($btnKeypad) $btnKeypad.setAttribute("aria-expanded", String(state.keypadOpen));
+    if ($hintMobile) {
+      $hintMobile.textContent = state.keypadOpen
+        ? "点按按键输入 · 点击结果复制"
+        : "已收起键盘 · 点输入框可用系统键盘";
+    }
+    applyInputMode();
+    renderKeypadTarget();
+  }
+
+  /** 从行元素反查各子节点，避免维护易失效的并行缓存 */
+  function rowDomFrom(el) {
+    if (!el) return null;
+    return {
+      el: el,
+      ta: el.querySelector("textarea"),
+      res: el.querySelector(".row-result"),
+      fin: el.querySelector(".row-fin"),
+      money: el.querySelector(".fin-money"),
+      upper: el.querySelector(".fin-upper")
+    };
+  }
+
+  /**
+   * 以「编辑」的方式改写目标行：把 [start,end) 替换为 text，并按需回焦。
+   * 插入、退格、清空都走这一条路径，保证行为一致。
+   */
+  function editTargetRow(fn) {
+    var page = currentPage();
+    var i = targetRowIndex();
+    if (i < 0) return false;
+    var row = page.rows[i];
+    var ta = targetTextarea();
+    if (!row || !ta) return false;
+
+    var cur = ta.value || "";
+    var caret = ta._caret || { start: cur.length, end: cur.length };
+    var start = Math.max(0, Math.min(caret.start, cur.length));
+    var end = Math.max(start, Math.min(caret.end, cur.length));
+
+    var out = fn(cur, start, end);
+    if (!out) return false;
+    var next = out.text;
+    var pos = Math.max(0, Math.min(out.pos == null ? start : out.pos, next.length));
+
+    row.expr = next;
+    row.ev = evalExpr(next);
+    ta.value = next;
+    ta._caret = { start: pos, end: pos };
+    autosize(ta);
+
+    var dom = rowDomFrom(ta.closest(".row"));
+    if (dom) refreshRow(row, dom);
+    saveSoon();
+
+    // inputmode=none 下聚焦不会弹出系统键盘，可以放心回焦以保留光标
+    if (document.activeElement !== ta) ta.focus();
+    try { ta.setSelectionRange(pos, pos); } catch (e) {}
+    renderKeypadTarget();
+    return true;
+  }
+
+  function keypadInsert(text) {
+    editTargetRow(function (cur, start, end) {
+      return { text: cur.slice(0, start) + text + cur.slice(end), pos: start + text.length };
+    });
+  }
+
+  function keypadBackspace() {
+    var page = currentPage();
+    var i = targetRowIndex();
+    if (i < 0) return;
+
+    // 空行退格：与物理键盘一致，删除该行
+    var ta = targetTextarea();
+    if (ta && !ta.value) {
+      if (page.rows.length > 1) removeRow(i);
+      return;
+    }
+
+    editTargetRow(function (cur, start, end) {
+      var s = start;
+      if (s === end) {
+        if (s === 0) return null;
+        s -= 1;
+      }
+      return { text: cur.slice(0, s) + cur.slice(end), pos: s };
+    });
+  }
+
+  function keypadClear() {
+    editTargetRow(function () { return { text: "", pos: 0 }; });
+  }
+
+  if ($keypadGrid) {
+    $keypadGrid.addEventListener("click", function (e) {
+      var btn = e.target.closest(".key");
+      if (!btn) return;
+      e.preventDefault();
+      var act = btn.getAttribute("data-act");
+      if (act === "back") keypadBackspace();
+      else if (act === "clear") keypadClear();
+      else if (act === "enter") handleEnter(targetRowIndex());
+      else {
+        var ins = btn.getAttribute("data-ins");
+        if (ins) keypadInsert(ins);
+      }
+    });
+
+    // 阻止按键抢走焦点：否则输入框失焦、光标位置丢失
+    $keypadGrid.addEventListener("mousedown", function (e) {
+      if (e.target.closest(".key")) e.preventDefault();
+    });
+  }
+
+  if ($btnKeypad) {
+    $btnKeypad.addEventListener("click", function () {
+      state.keypadOpen = !state.keypadOpen;
+      applyKeypad();
+    });
   }
 
   /* ============================ 财务模式 ============================ */
@@ -791,6 +994,7 @@
   window.addEventListener("resize", function () {
     // 断点切换时重新套用样式（桌面折叠偏好与移动抽屉状态互不影响）
     applySidebar();
+    applyInputMode();
   });
 
   window.addEventListener("blur", function () { flush(); });

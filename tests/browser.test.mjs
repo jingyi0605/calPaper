@@ -58,6 +58,9 @@ async function connect() {
   };
   await send("Page.enable");
   await send("Runtime.enable");
+  // 无头模式下页面默认不被视为「已聚焦」，focus 事件不会派发；
+  // 打开焦点模拟后行为才与真实浏览器一致（虚拟键盘依赖 focus 记录当前行）。
+  await send("Emulation.setFocusEmulationEnabled", { enabled: true });
   return { send, evaluate, errors };
 }
 
@@ -85,7 +88,41 @@ window.__t = {
   finHidden: (i) => document.querySelectorAll('#pad .row .row-fin')[i].classList.contains('hidden'),
   overflowX: () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
   sidebarRect: () => { const r = document.getElementById('sidebar').getBoundingClientRect(); return { left: Math.round(r.left), width: Math.round(r.width) }; },
-  scrimOn: () => { const s = document.getElementById('scrim'); return !!s && !s.hidden && s.classList.contains('on'); }
+  scrimOn: () => { const s = document.getElementById('scrim'); return !!s && !s.hidden && s.classList.contains('on'); },
+
+  /* --- 虚拟键盘 --- */
+  kp: () => document.getElementById('keypad'),
+  kpVisible: () => {
+    const kp = document.getElementById('keypad');
+    if (!kp || getComputedStyle(kp).display === 'none') return false;
+    return kp.getBoundingClientRect().height > 0;
+  },
+  kpCollapsed: () => document.getElementById('keypad').classList.contains('collapsed'),
+  kpHeight: () => Math.round(document.getElementById('keypad').getBoundingClientRect().height),
+  kpTarget: () => document.getElementById('keypad-target').textContent,
+  kpToggle: () => document.getElementById('btn-keypad').click(),
+  /** 按 data-ins 或 data-act 点击键盘按键 */
+  kpPress: (sel) => {
+    const btn = document.querySelector('#keypad-grid .key[' + sel + ']');
+    if (!btn) return 'no-key:' + sel;
+    btn.click();
+    return 'ok';
+  },
+  kpKeyCount: () => document.querySelectorAll('#keypad-grid .key').length,
+  /** 聚焦某行并把光标放到指定位置 */
+  focusAt: (i, pos) => {
+    const ta = document.querySelectorAll('#pad .row textarea')[i];
+    ta.focus();
+    const p = pos == null ? ta.value.length : pos;
+    ta.setSelectionRange(p, p);
+    ta.dispatchEvent(new Event('click', { bubbles: true }));
+    return true;
+  },
+  caret: (i) => {
+    const ta = document.querySelectorAll('#pad .row textarea')[i];
+    return { start: ta.selectionStart, end: ta.selectionEnd, active: document.activeElement === ta };
+  },
+  inputMode: (i) => document.querySelectorAll('#pad .row textarea')[i].getAttribute('inputmode')
 };
 true;
 `;
@@ -211,7 +248,121 @@ async function main() {
   await sleep(500);
   check("桌面端可再次展开", await evaluate("document.getElementById('sidebar').classList.contains('collapsed')"), false);
 
-  /* ============ 3. PWA ============ */
+  /* ============ 3. 虚拟键盘（移动端） ============ */
+  // 前面的用例已留下多行内容，这里重置到干净状态再测键盘
+  await send("Page.navigate", { url: "about:blank" });
+  await sleep(400);
+  await send("Storage.clearDataForOrigin", { origin, storageTypes: "local_storage" });
+  await sleep(400);
+  await send("Emulation.setDeviceMetricsOverride", { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
+  await send("Page.navigate", { url });
+  await sleep(2200);
+  await evaluate(HELPERS);
+
+  check("键盘测试起始为单行", await evaluate("window.__t.rows().length"), 1);
+  check("移动端键盘可见", await evaluate("window.__t.kpVisible()"), true);
+  check("键盘默认展开", await evaluate("window.__t.kpCollapsed()"), false);
+  check("按键数量", await evaluate("window.__t.kpKeyCount()"), 21);
+  check("展开时输入框 inputmode=none", await evaluate("window.__t.inputMode(0)"), "none");
+
+  // 点按数字键输入
+  await evaluate("window.__t.focusAt(0, 0)");
+  await sleep(120);
+  for (const d of ["1", "2", "3"]) {
+    await evaluate(`window.__t.kpPress('data-ins="${d}"')`);
+    await sleep(90);
+  }
+  check("点按数字键输入", await evaluate("window.__t.ta(0).value"), "123");
+  check("输入后即时求值", await evaluate("window.__t.result(0)"), "=123");
+
+  // 光标位置插入：把光标移到 1 后面再插入
+  await evaluate("window.__t.focusAt(0, 1)");
+  await sleep(120);
+  await evaluate(`window.__t.kpPress('data-ins="+"')`);
+  await sleep(120);
+  check("在光标处插入", await evaluate("window.__t.ta(0).value"), "1+23");
+  check("插入后光标停在插入内容之后", await evaluate("window.__t.caret(0).start"), 2);
+  check("插入后保持聚焦", await evaluate("window.__t.caret(0).active"), true);
+
+  // 运算符与括号：先清空，再从行尾顺序输入，避免依赖上一步的光标位置
+  await evaluate("window.__t.kpPress('data-act=\"clear\"')");
+  await sleep(150);
+  for (const d of ["2", "*", "(", "3", "+", "4", ")"]) {
+    await evaluate(`window.__t.kpPress('data-ins="${d}"')`);
+    await sleep(90);
+  }
+  check("运算符与括号可用", await evaluate("window.__t.ta(0).value"), "2*(3+4)");
+  check("括号表达式求值", await evaluate("window.__t.result(0)"), "=14");
+
+  // 退格：删除光标前一个字符
+  await evaluate(`window.__t.kpPress('data-act="back"')`);
+  await sleep(120);
+  check("退格删除光标前一个字符", await evaluate("window.__t.ta(0).value"), "2*(3+4");
+
+  // 清空
+  await evaluate(`window.__t.kpPress('data-act="clear"')`);
+  await sleep(150);
+  check("C 清空当前行", await evaluate("window.__t.ta(0).value"), "");
+  check("清空后结果区为空", await evaluate("window.__t.result(0)"), "");
+
+  // 换行键携带结果
+  await evaluate("window.__t.focusAt(0, 0)");
+  await sleep(100);
+  for (const d of ["8", "0", "0"]) {
+    await evaluate(`window.__t.kpPress('data-ins="${d}"')`);
+    await sleep(90);
+  }
+  await evaluate(`window.__t.kpPress('data-act="enter"')`);
+  await sleep(300);
+  check("换行键新增一行", await evaluate("window.__t.rows().length"), 2);
+  check("换行键携带结果", await evaluate("window.__t.ta(1).value"), "800");
+
+  // 目标行提示
+  check("目标行提示显示当前行", await evaluate("window.__t.kpTarget()"), "第 2 行");
+
+  // 作用行跟随聚焦
+  await evaluate("window.__t.focusAt(0, 0)");
+  await sleep(150);
+  check("聚焦第 1 行后提示更新", await evaluate("window.__t.kpTarget()"), "第 1 行");
+  await evaluate(`window.__t.kpPress('data-ins="7"')`);
+  await sleep(120);
+  check("按键写入聚焦的那一行", await evaluate("window.__t.ta(0).value"), "7800");
+  check("未影响其他行", await evaluate("window.__t.ta(1).value"), "800");
+
+  // 收起 / 展开
+  const expandedH = await evaluate("window.__t.kpHeight()");
+  await evaluate("window.__t.kpToggle()");
+  await sleep(500);
+  check("收起后键盘高度变小", (await evaluate("window.__t.kpHeight()")) < expandedH, true);
+  check("收起后加 collapsed 类", await evaluate("window.__t.kpCollapsed()"), true);
+  check("收起后恢复系统键盘", await evaluate("window.__t.inputMode(0)"), null);
+
+  await evaluate("window.__t.kpToggle()");
+  await sleep(500);
+  check("再次展开恢复高度", await evaluate("window.__t.kpHeight()"), expandedH);
+  check("展开后 inputmode 恢复 none", await evaluate("window.__t.inputMode(0)"), "none");
+  check("键盘展开时无横向溢出", await evaluate("window.__t.overflowX()"), 0);
+
+  // 键盘展开时仍能看到输入区
+  check("键盘展开时输入区可见", await evaluate("document.getElementById('pad').getBoundingClientRect().height > 0"), true);
+
+  // 偏好持久化
+  await evaluate("window.__t.kpToggle()");
+  await sleep(700);
+  await send("Page.navigate", { url });
+  await sleep(2200);
+  await evaluate(HELPERS);
+  check("收起状态已持久化", await evaluate("window.__t.kpCollapsed()"), true);
+  await evaluate("window.__t.kpToggle()");
+  await sleep(500);
+
+  // 桌面端不显示键盘
+  await send("Emulation.setDeviceMetricsOverride", { width: 1280, height: 860, deviceScaleFactor: 1, mobile: false });
+  await sleep(600);
+  check("桌面端隐藏键盘", await evaluate("window.__t.kpVisible()"), false);
+  check("桌面端不设 inputmode", await evaluate("window.__t.inputMode(0)"), null);
+
+  /* ============ 4. PWA ============ */
   check("存在 manifest 链接", await evaluate("!!document.querySelector('link[rel=manifest]')"), true);
   const manifest = await evaluate("fetch('manifest.webmanifest').then(r => r.json()).then(m => ({ name: m.name, display: m.display, icons: m.icons.length, start: m.start_url }))");
   check("manifest 可解析", typeof manifest === "object" && manifest !== null, true);
@@ -288,6 +439,19 @@ async function main() {
   const shot3 = await send("Page.captureScreenshot", { format: "png" });
   writeFileSync(join(ROOT, "tests", "screenshot-dark.png"), Buffer.from(shot3.result.data, "base64"));
   await send("Emulation.setEmulatedMedia", { features: [] });
+
+  // 移动端键盘收起状态
+  await send("Emulation.setDeviceMetricsOverride", { width: 390, height: 844, deviceScaleFactor: 3, mobile: true });
+  await sleep(700);
+  await evaluate(HELPERS);
+  await evaluate("window.__t.focusAt(0, 0)");
+  await sleep(150);
+  if (!(await evaluate("window.__t.kpCollapsed()"))) {
+    await evaluate("window.__t.kpToggle()");
+    await sleep(500);
+  }
+  const shot4 = await send("Page.captureScreenshot", { format: "png" });
+  writeFileSync(join(ROOT, "tests", "screenshot-mobile-keypad-collapsed.png"), Buffer.from(shot4.result.data, "base64"));
 
   /* ============ 汇总 ============ */
   const failed = results.filter((r) => !r.pass);

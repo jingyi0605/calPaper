@@ -422,6 +422,109 @@ textarea, input { -webkit-user-select: text; user-select: text; }
   gap: 10px;
 }
 
+/* ---------------- 计算器虚拟键盘（仅移动端显示） ---------------- */
+.keypad {
+  display: none;
+  flex: none;
+  background: var(--panel);
+  border-top: 1px solid var(--border);
+  padding-bottom: env(safe-area-inset-bottom);
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.keypad-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  height: 30px;
+  padding: 0 14px;
+  border: none;
+  background: transparent;
+  color: var(--text-3);
+  font-family: inherit;
+  font-size: 11.5px;
+  font-weight: 550;
+  cursor: pointer;
+  text-align: left;
+}
+.keypad-head:active { background: var(--bg-soft); }
+.keypad-chevron {
+  flex: none;
+  transition: transform 0.2s cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+.keypad.collapsed .keypad-chevron { transform: rotate(-90deg); }
+.keypad-title { flex: none; }
+/* 当前作用行提示，如「第 2 行」 */
+.keypad-target {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: right;
+  color: var(--text-3);
+  opacity: 0.85;
+}
+
+.keypad-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  grid-auto-rows: 46px;
+  gap: 5px;
+  padding: 0 8px 8px;
+  overflow: hidden;
+  /* 6 行 × 46px + 5 道间隙 × 5px + 底部内边距 8px = 309px，留些余量便于过渡 */
+  max-height: 320px;
+  transition: max-height 0.22s cubic-bezier(0.22, 0.61, 0.36, 1),
+              padding-bottom 0.22s ease, opacity 0.16s ease;
+}
+.keypad.collapsed .keypad-grid {
+  max-height: 0;
+  padding-bottom: 0;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.key {
+  border: none;
+  border-radius: 10px;
+  background: var(--panel-2);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 19px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  transition: background 0.1s ease, transform 0.06s ease;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+.key:active { transform: scale(0.96); background: var(--border); }
+.key-op { color: var(--accent); font-weight: 600; background: var(--accent-soft); }
+.key-op:active { background: var(--accent); color: #fff; }
+.key-fn { color: var(--text-2); font-size: 16px; font-weight: 600; }
+.key-enter {
+  grid-column: span 4;
+  background: linear-gradient(135deg, var(--accent), var(--accent-2));
+  color: #fff;
+  font-size: 14.5px;
+  font-weight: 600;
+}
+.key-enter:active { filter: brightness(1.08); }
+
+/* 移动端提示语与桌面端不同 */
+.hint-mobile { display: none; }
+@media (max-width: 720px) {
+  .hint-desktop { display: none; }
+  .hint-mobile { display: inline; }
+}
+
 /* ---------------- Toast ---------------- */
 .toasts {
   position: fixed;
@@ -486,6 +589,11 @@ textarea, input { -webkit-user-select: text; user-select: text; }
   .row { padding: 10px 12px 8px; border-radius: 12px; }
   .row-main { gap: 8px; }
   .row-result { font-size: 18px; max-width: 62%; }
+
+  /* 移动端启用虚拟键盘 */
+  .keypad { display: flex; flex-direction: column; }
+  /* 键盘展开时压缩输入区最小高度，保证仍能看到若干行 */
+  .pad { min-height: 0; }
 
   /* 侧栏改为抽屉：脱离文档流，从左侧滑入 */
   .sidebar {
