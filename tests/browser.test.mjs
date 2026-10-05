@@ -122,7 +122,45 @@ window.__t = {
     const ta = document.querySelectorAll('#pad .row textarea')[i];
     return { start: ta.selectionStart, end: ta.selectionEnd, active: document.activeElement === ta };
   },
-  inputMode: (i) => document.querySelectorAll('#pad .row textarea')[i].getAttribute('inputmode')
+  inputMode: (i) => document.querySelectorAll('#pad .row textarea')[i].getAttribute('inputmode'),
+
+  /* --- 收起按钮 / 震动 / 自动滚动 --- */
+  kpActionText: () => document.getElementById('keypad-action').textContent,
+  kpToggleRect: () => {
+    const r = document.getElementById('btn-keypad').getBoundingClientRect();
+    return { w: Math.round(r.width), h: Math.round(r.height) };
+  },
+  hapticOn: () => document.getElementById('btn-haptic').classList.contains('on'),
+  hapticPress: () => document.getElementById('btn-haptic').click(),
+  hapticAria: () => document.getElementById('btn-haptic').getAttribute('aria-pressed'),
+  /** 记录 navigator.vibrate 的调用 */
+  spyVibrate: () => {
+    window.__vib = [];
+    navigator.vibrate = (ms) => { window.__vib.push(ms); return true; };
+    return true;
+  },
+  vibCalls: () => window.__vib.slice(),
+  /** 作用行是否完整落在可见区内（考虑键盘占位） */
+  rowVisible: (i) => {
+    const pad = document.getElementById('pad');
+    const el = pad.querySelectorAll('.row')[i];
+    if (!el) return 'no-row';
+    const p = pad.getBoundingClientRect();
+    const r = el.getBoundingClientRect();
+    return r.top >= p.top - 1 && r.bottom <= p.bottom + 1;
+  },
+  padScroll: () => Math.round(document.getElementById('pad').scrollTop),
+  /** 造出足够多的行，使内容超出可视区 */
+  fillRows: (n) => {
+    const ta = document.querySelectorAll('#pad .row textarea')[document.querySelectorAll('#pad .row textarea').length - 1];
+    const s = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set;
+    for (let i = 0; i < n; i++) {
+      s.call(ta, String(100 + i));
+      ta.dispatchEvent(new Event('input', { bubbles: true }));
+      ta.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+    }
+    return document.querySelectorAll('#pad .row textarea').length;
+  }
 };
 true;
 `;
@@ -336,12 +374,81 @@ async function main() {
   check("收起后键盘高度变小", (await evaluate("window.__t.kpHeight()")) < expandedH, true);
   check("收起后加 collapsed 类", await evaluate("window.__t.kpCollapsed()"), true);
   check("收起后恢复系统键盘", await evaluate("window.__t.inputMode(0)"), null);
+  check("收起后按钮文案变为展开", await evaluate("window.__t.kpActionText()"), "展开");
 
   await evaluate("window.__t.kpToggle()");
   await sleep(500);
   check("再次展开恢复高度", await evaluate("window.__t.kpHeight()"), expandedH);
   check("展开后 inputmode 恢复 none", await evaluate("window.__t.inputMode(0)"), "none");
+  check("展开后按钮文案变为收起", await evaluate("window.__t.kpActionText()"), "收起");
   check("键盘展开时无横向溢出", await evaluate("window.__t.overflowX()"), 0);
+
+  // 收起按钮要足够大、好点
+  const toggleRect = await evaluate("window.__t.kpToggleRect()");
+  check("收起按钮高度不小于 40px", toggleRect.h >= 40, true);
+  check("收起按钮占据整条宽度", toggleRect.w > 200, true);
+
+  // 按键震动
+  await evaluate("window.__t.spyVibrate()");
+  await evaluate(`window.__t.kpPress('data-ins="1"')`);
+  await sleep(120);
+  check("按数字键触发震动", (await evaluate("window.__t.vibCalls()")).length > 0, true);
+  await evaluate("window.__t.spyVibrate()");
+  await evaluate(`window.__t.kpPress('data-act="enter"')`);
+  await sleep(200);
+  check("换行键震动反馈更明显", (await evaluate("window.__t.vibCalls()"))[0] > 10, true);
+
+  // 震动开关
+  check("震动默认开启", await evaluate("window.__t.hapticOn()"), true);
+  check("震动开关 aria-pressed=true", await evaluate("window.__t.hapticAria()"), "true");
+  await evaluate("window.__t.hapticPress()");
+  await sleep(200);
+  check("可关闭震动", await evaluate("window.__t.hapticOn()"), false);
+  check("关闭后 aria-pressed=false", await evaluate("window.__t.hapticAria()"), "false");
+  await evaluate("window.__t.spyVibrate()");
+  await evaluate(`window.__t.kpPress('data-ins="2"')`);
+  await sleep(150);
+  check("关闭后按键不再震动", (await evaluate("window.__t.vibCalls()")).length, 0);
+  await evaluate("window.__t.hapticPress()");
+  await sleep(200);
+  check("可再次开启震动", await evaluate("window.__t.hapticOn()"), true);
+
+  // 自动滚动到当前活动行
+  await evaluate("window.__t.kpToggle()");
+  await sleep(400);
+  await evaluate("window.__t.kpToggle()");
+  await sleep(500);
+  const rowCount = await evaluate("window.__t.fillRows(14)");
+  check("已造出多行内容", rowCount > 12, true);
+  await sleep(300);
+  // 聚焦最后一行：它原本被键盘挡在下面
+  await evaluate(`window.__t.focusAt(${rowCount - 1}, 0)`);
+  await sleep(400);
+  check("聚焦靠下的行后自动滚入视野", await evaluate(`window.__t.rowVisible(${rowCount - 1})`), true);
+  check("确实发生了滚动", (await evaluate("window.__t.padScroll()")) > 0, true);
+
+  // 收起键盘后再展开，应把作用行重新带回视野
+  await evaluate("document.getElementById('pad').scrollTop = 0");
+  await evaluate(`window.__t.focusAt(${rowCount - 1}, 0)`);
+  await sleep(300);
+  await evaluate("document.getElementById('pad').scrollTop = 0");
+  await sleep(200);
+  await evaluate("window.__t.kpToggle()");
+  await sleep(500);
+  await evaluate("window.__t.kpToggle()");
+  await sleep(700);
+  check("展开键盘后作用行仍在视野内", await evaluate(`window.__t.rowVisible(${rowCount - 1})`), true);
+
+  // 用键盘的换行键新增行后，新行也要可见
+  await evaluate(`window.__t.focusAt(${rowCount - 1}, 0)`);
+  await sleep(300);
+  await evaluate(`window.__t.kpPress('data-ins="5"')`);
+  await sleep(150);
+  await evaluate(`window.__t.kpPress('data-act="enter"')`);
+  await sleep(600);
+  const afterEnterCount = await evaluate("window.__t.rows().length");
+  check("换行键新增了一行", afterEnterCount > rowCount, true);
+  check("新增行自动滚入视野", await evaluate(`window.__t.rowVisible(${afterEnterCount - 1})`), true);
 
   // 键盘展开时仍能看到输入区
   check("键盘展开时输入区可见", await evaluate("document.getElementById('pad').getBoundingClientRect().height > 0"), true);
@@ -411,9 +518,15 @@ async function main() {
   await send("Network.emulateNetworkConditions", { offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1 });
 
   /* ============ 4. 截图 ============ */
+  // 先清掉测试过程留下的数据，截图只展示正常使用状态
+  await send("Page.navigate", { url: "about:blank" });
+  await sleep(400);
+  await send("Storage.clearDataForOrigin", { origin, storageTypes: "local_storage" });
+  await sleep(400);
+
   await send("Emulation.setDeviceMetricsOverride", { width: 1280, height: 860, deviceScaleFactor: 2, mobile: false });
   await send("Page.navigate", { url });
-  await sleep(2000);
+  await sleep(2200);
   await evaluate(HELPERS);
   await evaluate(`
     window.__t.setVal(window.__t.ta(0), '2380 * 12.5');

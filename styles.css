@@ -435,23 +435,37 @@ textarea, input { -webkit-user-select: text; user-select: text; }
 
 .keypad-head {
   display: flex;
+  align-items: stretch;
+  gap: 6px;
+  padding: 6px 8px 0;
+}
+
+/* 收起 / 展开：整条可点，高度加大以保证好点、看得见 */
+.keypad-toggle {
+  flex: 1;
+  min-width: 0;
+  display: flex;
   align-items: center;
-  gap: 7px;
-  width: 100%;
-  height: 30px;
-  padding: 0 14px;
-  border: none;
-  background: transparent;
-  color: var(--text-3);
+  gap: 8px;
+  height: 40px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: 11px;
+  background: var(--panel-2);
+  color: var(--text-2);
   font-family: inherit;
-  font-size: 11.5px;
-  font-weight: 550;
+  font-size: 12.5px;
+  font-weight: 600;
   cursor: pointer;
   text-align: left;
+  transition: background 0.12s ease, border-color 0.12s ease;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
 }
-.keypad-head:active { background: var(--bg-soft); }
+.keypad-toggle:active { background: var(--border); }
 .keypad-chevron {
   flex: none;
+  color: var(--text-3);
   transition: transform 0.2s cubic-bezier(0.22, 0.61, 0.36, 1);
 }
 .keypad.collapsed .keypad-chevron { transform: rotate(-90deg); }
@@ -465,7 +479,41 @@ textarea, input { -webkit-user-select: text; user-select: text; }
   white-space: nowrap;
   text-align: right;
   color: var(--text-3);
-  opacity: 0.85;
+  font-weight: 500;
+}
+/* 「收起 / 展开」动作提示，让按钮用途一目了然 */
+.keypad-action {
+  flex: none;
+  padding: 3px 9px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 11.5px;
+  font-weight: 600;
+}
+
+/* 按键震动开关 */
+.keypad-haptic {
+  flex: none;
+  width: 40px;
+  height: 40px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border);
+  border-radius: 11px;
+  background: var(--panel-2);
+  color: var(--text-3);
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+.keypad-haptic:active { background: var(--border); }
+.keypad-haptic.on {
+  background: var(--accent-soft);
+  border-color: transparent;
+  color: var(--accent);
 }
 
 .keypad-grid {

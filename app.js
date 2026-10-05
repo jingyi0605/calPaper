@@ -121,6 +121,7 @@
     sidebarCollapsed: false,
     drawerOpen: false,
     keypadOpen: true,
+    haptic: true,
     activeRow: -1,
     editingRename: false,
     renamingId: null,
@@ -189,6 +190,7 @@
     s.finance = state.finance;
     s.sidebarCollapsed = state.sidebarCollapsed;
     s.keypadOpen = state.keypadOpen;
+    s.haptic = state.haptic;
     db.put(s);
   }
 
@@ -207,6 +209,7 @@
     state.finance = !!settings.finance;
     state.sidebarCollapsed = !!settings.sidebarCollapsed;
     state.keypadOpen = settings.keypadOpen !== false;
+    state.haptic = settings.haptic !== false;
 
     var docs = (db.allDocs("page/") || []).filter(function (d) { return d && d._id; });
     docs.sort(function (a, b) { return (b.createdAt || 0) - (a.createdAt || 0); });
@@ -258,6 +261,8 @@
   var $btnKeypad = document.getElementById("btn-keypad");
   var $keypadGrid = document.getElementById("keypad-grid");
   var $keypadTarget = document.getElementById("keypad-target");
+  var $keypadAction = document.getElementById("keypad-action");
+  var $btnHaptic = document.getElementById("btn-haptic");
 
   function pad2(n) { return n < 10 ? "0" + n : "" + n; }
   function fmtDate(ts) {
@@ -630,6 +635,8 @@
       state.activeRow = index;
       rememberCaret();
       renderKeypadTarget();
+      // 点选靠下的行时，键盘会挡住它，滚一下保证可见
+      if (state.keypadOpen) scrollRowIntoView(index);
     });
     ["click", "keyup", "select"].forEach(function (evt) {
       ta.addEventListener(evt, rememberCaret);
@@ -706,6 +713,7 @@
     renderSidebar();
     renderPad();
     applyKeypad();
+    applyHaptic();
   }
 
   /* ---------- 行操作 ---------- */
@@ -786,6 +794,40 @@
     setTimeout(function () { el.classList.remove("just-added"); }, 240);
   }
 
+  /* ---------- 按键震动 ---------- */
+
+  /* iOS Safari 不实现 navigator.vibrate，但点击带 switch 属性的复选框会触发
+     系统触感（iOS 17.4+）。用一个不可见但仍参与渲染的复选框作为回退通道
+     —— 不能用 display:none，那样不会触发触感。 */
+  var hapticSwitch = null;
+
+  function ensureHapticSwitch() {
+    if (hapticSwitch) return hapticSwitch;
+    var label = document.createElement("label");
+    label.setAttribute("aria-hidden", "true");
+    label.style.cssText =
+      "position:fixed;right:0;bottom:0;width:1px;height:1px;" +
+      "opacity:0;pointer-events:none;overflow:hidden";
+    var input = document.createElement("input");
+    input.type = "checkbox";
+    input.setAttribute("switch", "");
+    input.tabIndex = -1;
+    label.appendChild(input);
+    document.body.appendChild(label);
+    hapticSwitch = label;
+    return label;
+  }
+
+  function vibrate(ms) {
+    if (!state.haptic) return;
+    if (typeof navigator.vibrate === "function") {
+      try { navigator.vibrate(ms); } catch (e) {}
+      return;
+    }
+    // 回退：仅 iOS 有意义，其他平台静默忽略
+    try { ensureHapticSwitch().click(); } catch (e) {}
+  }
+
   /* ============================ 虚拟键盘 ============================ */
 
   /** 键盘作用的目标行：优先上次聚焦的行，否则取最后一行 */
@@ -813,10 +855,31 @@
     $keypadTarget.textContent = i >= 0 ? "第 " + (i + 1) + " 行" : "";
   }
 
+  /**
+   * 把某一行滚入可视区。只在需要时滚动，避免输入过程中画面频繁跳动。
+   * 键盘展开会占掉底部空间，此时作用行常被挤出视野，需要重新定位。
+   */
+  function scrollRowIntoView(index) {
+    var el = $pad.querySelectorAll(".row")[index];
+    if (!el) return;
+    var padRect = $pad.getBoundingClientRect();
+    var rowRect = el.getBoundingClientRect();
+    var top = padRect.top + 10;
+    var bottom = padRect.bottom - 10;
+    if (rowRect.bottom > bottom) $pad.scrollTop += rowRect.bottom - bottom;
+    else if (rowRect.top < top) $pad.scrollTop -= top - rowRect.top;
+  }
+
+  function scrollActiveRowIntoView() {
+    var i = targetRowIndex();
+    if (i >= 0) scrollRowIntoView(i);
+  }
+
   function applyKeypad() {
     if (!$keypad) return;
     $keypad.classList.toggle("collapsed", !state.keypadOpen);
     if ($btnKeypad) $btnKeypad.setAttribute("aria-expanded", String(state.keypadOpen));
+    if ($keypadAction) $keypadAction.textContent = state.keypadOpen ? "收起" : "展开";
     if ($hintMobile) {
       $hintMobile.textContent = state.keypadOpen
         ? "点按按键输入 · 点击结果复制"
@@ -916,6 +979,7 @@
       if (!btn) return;
       e.preventDefault();
       var act = btn.getAttribute("data-act");
+      vibrate(act === "enter" ? 18 : 10);
       if (act === "back") keypadBackspace();
       else if (act === "clear") keypadClear();
       else if (act === "enter") handleEnter(targetRowIndex());
@@ -934,7 +998,28 @@
   if ($btnKeypad) {
     $btnKeypad.addEventListener("click", function () {
       state.keypadOpen = !state.keypadOpen;
+      vibrate(10);
       applyKeypad();
+      saveSoon();
+      // 展开后把当前作用行滚回视野，否则它常被键盘挡在下面
+      if (state.keypadOpen) {
+        setTimeout(scrollActiveRowIntoView, 240);
+      }
+    });
+  }
+
+  function applyHaptic() {
+    if (!$btnHaptic) return;
+    $btnHaptic.classList.toggle("on", state.haptic);
+    $btnHaptic.setAttribute("aria-pressed", String(state.haptic));
+  }
+
+  if ($btnHaptic) {
+    $btnHaptic.addEventListener("click", function () {
+      state.haptic = !state.haptic;
+      applyHaptic();
+      saveSoon();
+      vibrate(15);
     });
   }
 
@@ -1228,6 +1313,9 @@
     var page = currentPage();
     if (!page.locked && !mobile) {
       setTimeout(function () { focusRow(page.rows.length - 1); }, 60);
+    } else if (mobile && state.keypadOpen) {
+      // 键盘已展开：把当前作用行滚入视野，否则按键可能写到看不见的行上
+      setTimeout(scrollActiveRowIntoView, 120);
     }
   }
 
