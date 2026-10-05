@@ -150,6 +150,11 @@ window.__t = {
     return r.top >= p.top - 1 && r.bottom <= p.bottom + 1;
   },
   padScroll: () => Math.round(document.getElementById('pad').scrollTop),
+  /** 底部一行的按键顺序（用于校验 0 与 . 的位置） */
+  kpBottomRow: () => {
+    const keys = [...document.querySelectorAll('#keypad-grid .key')];
+    return keys.slice(-5, -1).map((k) => k.getAttribute('data-ins'));
+  },
   /** 造出足够多的行，使内容超出可视区 */
   fillRows: (n) => {
     const ta = document.querySelectorAll('#pad .row textarea')[document.querySelectorAll('#pad .row textarea').length - 1];
@@ -301,6 +306,8 @@ async function main() {
   check("移动端键盘可见", await evaluate("window.__t.kpVisible()"), true);
   check("键盘默认展开", await evaluate("window.__t.kpCollapsed()"), false);
   check("按键数量", await evaluate("window.__t.kpKeyCount()"), 21);
+  // 底部一行是 . 0 % +，小数点排在 0 左侧
+  check("底部按键顺序为 . 0 % +", (await evaluate("window.__t.kpBottomRow()")).join(" "), ". 0 % +");
   check("展开时输入框 inputmode=none", await evaluate("window.__t.inputMode(0)"), "none");
 
   // 点按数字键输入
