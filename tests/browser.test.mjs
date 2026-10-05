@@ -5,16 +5,16 @@
  *       移动端布局无横向溢出 / PWA（manifest、SW、图标）
  *
  * 用法：先启动本地服务与可调试浏览器
- *   node tools/serve.mjs 8080
+ *   node tools/serve.mjs 8185
  *   "Microsoft Edge" --headless=new --remote-debugging-port=9223 about:blank
- *   node tests/browser.test.mjs http://localhost:8080/
+ *   node tests/browser.test.mjs http://localhost:8185/
  */
 import { writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
 const PORT = Number(process.env.CDP_PORT || 9223);
-const BASE = process.argv[2] || "http://localhost:8080/";
+const BASE = process.argv[2] || "http://localhost:8185/";
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));

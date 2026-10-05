@@ -27,11 +27,15 @@
 ### 本地预览（含 PWA）
 
 ```bash
-npm run serve          # 默认 http://localhost:8080
+npm run serve          # 默认 http://localhost:8185，同时监听 0.0.0.0（局域网可访问）
 ```
 
 Service Worker 需要 `http://localhost` 或 `https://` 环境。用 localhost 打开后，
 即可在浏览器地址栏看到「安装」按钮。
+
+> **用手机测试**：启动后终端会打印局域网地址（如 `http://192.168.1.5:8185/`）。
+> 注意局域网 http 属于非安全上下文，浏览器不会注册 Service Worker（因此不能安装 PWA），
+> 但计算、财务模式、复制等核心功能都可正常使用。
 
 ### 部署到线上
 
@@ -99,7 +103,7 @@ npm run icons         # 重新生成图标（改了 icons/logo.png 后执行）
 npm run serve &
 "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge" \
   --headless=new --remote-debugging-port=9223 --no-first-run about:blank &
-node tests/browser.test.mjs http://localhost:8080/
+node tests/browser.test.mjs http://localhost:8185/
 ```
 
 浏览器测试覆盖：计算正确性、财务模式、复制、回车携带、持久化、移动端布局无横向溢出、
